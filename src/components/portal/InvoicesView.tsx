@@ -4,8 +4,13 @@ import {
   ArrowUpDown, ChevronDown, ChevronUp, Printer,
   Loader2, RefreshCw, Wifi, WifiOff, ChevronLeft, ChevronRight
 } from 'lucide-react';
-import { invoices as mockInvoices, formatCurrency, formatDate, Invoice } from '@/data/portalData';
-import { useERPNext, formatERPDate, mapInvoiceStatus } from '@/hooks/useERPNext';
+// import { invoices as mockInvoices, formatCurrency, formatDate, Invoice } from '@/data/portalData';
+import {
+  fetchSalesInvoices,
+  fetchSalesInvoiceDetail,
+  fetchSalesInvoiceCount
+} from "@/contexts/erpApi";
+import {  formatERPDate, mapInvoiceStatus } from '@/hooks/useERPNext';
 import { useERPNextSettings } from '@/contexts/ERPNextContext';
 import StatusBadge from './StatusBadge';
 
@@ -19,118 +24,164 @@ const InvoicesView: React.FC = () => {
   const [erpInvoices, setErpInvoices] = useState<any[]>([]);
   const [erpLoading, setErpLoading] = useState(false);
   const [erpError, setErpError] = useState<string | null>(null);
-  const [usingLive, setUsingLive] = useState(false);
+  // const [usingLive, setUsingLive] = useState(false);
   const [page, setPage] = useState(0);
   const [totalCount, setTotalCount] = useState(0);
   const [invoiceDetail, setInvoiceDetail] = useState<any>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const pageSize = 20;
 
-  const { getList, getDoc, getCount } = useERPNext();
+  // const { getList, getDoc, getCount } = useERPNext();
   const { isConfigured, settings } = useERPNextSettings();
 
   const statuses = ['All', 'Paid', 'Unpaid', 'Overdue', 'Partially Paid'];
 
   const fetchInvoices = useCallback(async () => {
-    if (!isConfigured) return;
-    setErpLoading(true);
-    setErpError(null);
 
-    try {
-      const filters: any[] = [['docstatus', '=', 1]];
-      if (settings?.customer_id) {
-        filters.push(['customer', '=', settings.customer_id]);
-      }
-      if (statusFilter === 'Paid') {
-        filters.push(['outstanding_amount', '=', 0]);
-      } else if (statusFilter === 'Unpaid') {
-        filters.push(['outstanding_amount', '>', 0], ['status', '!=', 'Overdue']);
-      } else if (statusFilter === 'Overdue') {
-        filters.push(['status', '=', 'Overdue']);
-      } else if (statusFilter === 'Partially Paid') {
-        filters.push(['outstanding_amount', '>', 0], ['outstanding_amount', '<', ['grand_total']]);
-      }
-      if (searchQuery) {
-        filters.push(['name', 'like', `%${searchQuery}%`]);
-      }
+  // if (!isConfigured) return;
 
-      const orderByField = sortField === 'date' ? 'posting_date' : sortField === 'total' ? 'grand_total' : 'outstanding_amount';
-      const orderBy = `${orderByField} ${sortDir}`;
+  setErpLoading(true);
+  setErpError(null);
 
-      const [listResult, countResult] = await Promise.all([
-        getList('Sales Invoice', {
-          fields: ['name', 'posting_date', 'due_date', 'grand_total', 'outstanding_amount', 'paid_amount', 'status', 'customer_name', 'currency'],
-          filters,
-          order_by: orderBy,
-          limit_page_length: pageSize,
-          limit_start: page * pageSize
-        }),
-        getCount('Sales Invoice', filters)
-      ]);
+  try {
 
-      if (listResult.success && listResult.data) {
-        setErpInvoices(listResult.data);
-        setUsingLive(true);
-      } else {
-        setErpError(listResult.error || 'Failed to fetch invoices');
-        setUsingLive(false);
-      }
+    const invoices = await fetchSalesInvoices({
+  page,
+  pageSize,
+  searchQuery,
+  statusFilter,
+  customerId: settings?.customer_id || "",
+  sortField,
+  sortDir
+});
 
-      if (countResult.success) {
-        setTotalCount(typeof countResult.data === 'number' ? countResult.data : 0);
-      }
-    } catch (err: any) {
-      setErpError(err.message);
-      setUsingLive(false);
-    } finally {
-      setErpLoading(false);
-    }
-  }, [isConfigured, settings, statusFilter, searchQuery, sortField, sortDir, page, getList, getCount]);
+console.log("ERP Invoices Response:", invoices);
+
+    const count = await fetchSalesInvoiceCount();
+console.log("ERP Invoice Count:", count);
+
+    setErpInvoices(invoices);
+    setTotalCount(count);
+    // setUsingLive(true);
+
+  } catch (err: any) {
+
+    console.error(err);
+    setErpError(err.message);
+    // setUsingLive(false);
+
+  } finally {
+
+    setErpLoading(false);
+
+  }
+
+}, [settings, statusFilter, searchQuery, sortField, sortDir, page]);
 
   useEffect(() => {
-    if (isConfigured) {
+    // if (isConfigured) {
       fetchInvoices();
-    }
-  }, [fetchInvoices, isConfigured]);
+    // }
+  }, [fetchInvoices]);
 
   const fetchInvoiceDetail = async (invName: string) => {
-    setDetailLoading(true);
-    const result = await getDoc('Sales Invoice', invName);
-    if (result.success && result.data) {
-      setInvoiceDetail(result.data);
-    }
-    setDetailLoading(false);
-  };
 
+  setDetailLoading(true);
+
+  try {
+
+    const detail = await fetchSalesInvoiceDetail(invName);
+
+    console.log("Invoice Detail:", detail);
+
+    setInvoiceDetail(detail);
+
+  } catch (err) {
+
+    console.error("Invoice detail error:", err);
+
+  } finally {
+
+    setDetailLoading(false);
+
+  }
+
+};
+
+const exportCSV = () => {
+  if (!erpInvoices || erpInvoices.length === 0) {
+    alert("No invoices to export");
+    return;
+  }
+
+  const headers = [
+    "Invoice",
+    "Customer",
+    "Posting Date",
+    "Due Date",
+    "Status",
+    "Currency",
+    "Total",
+    "Outstanding"
+  ];
+
+  const rows = erpInvoices.map((inv) => [
+    inv.name,
+    inv.customer_name,
+    formatERPDate(inv.posting_date),
+    formatERPDate(inv.due_date),
+    inv.status,
+    inv.currency || "PGK",
+    inv.grand_total,
+    inv.outstanding_amount
+  ]);
+
+  const csvContent =
+    [headers, ...rows]
+      .map((row) => row.join(","))
+      .join("\n");
+
+  const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+
+  const url = URL.createObjectURL(blob);
+
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "invoices.csv";
+
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+};
   // Fallback mock data
-  const totalOutstanding = mockInvoices.reduce((s, i) => s + i.amountDue, 0);
-  const overdueAmount = mockInvoices.filter(i => i.status === 'Overdue').reduce((s, i) => s + i.amountDue, 0);
-  const paidThisMonth = mockInvoices.filter(i => i.status === 'Paid' && i.date >= '2026-02-01').reduce((s, i) => s + i.total, 0);
+  // const totalOutstanding = mockInvoices.reduce((s, i) => s + i.amountDue, 0);
+  // const overdueAmount = mockInvoices.filter(i => i.status === 'Overdue').reduce((s, i) => s + i.amountDue, 0);
+  // const paidThisMonth = mockInvoices.filter(i => i.status === 'Paid' && i.date >= '2026-02-01').reduce((s, i) => s + i.total, 0);
 
   // Live summary
   const liveTotalOutstanding = erpInvoices.reduce((s, i) => s + Number(i.outstanding_amount || 0), 0);
   const liveOverdue = erpInvoices.filter(i => i.status === 'Overdue').reduce((s, i) => s + Number(i.outstanding_amount || 0), 0);
 
-  const filteredMockInvoices = useMemo(() => {
-    if (usingLive) return [];
-    let result = [...mockInvoices];
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
-      result = result.filter(i => i.id.toLowerCase().includes(q) || i.orderId.toLowerCase().includes(q));
-    }
-    if (statusFilter !== 'All') {
-      result = result.filter(i => i.status === statusFilter);
-    }
-    result.sort((a, b) => {
-      if (sortField === 'date') {
-        return sortDir === 'desc' ? new Date(b.date).getTime() - new Date(a.date).getTime() : new Date(a.date).getTime() - new Date(b.date).getTime();
-      }
-      const aVal = a[sortField as keyof Invoice] as number;
-      const bVal = b[sortField as keyof Invoice] as number;
-      return sortDir === 'desc' ? bVal - aVal : aVal - bVal;
-    });
-    return result;
-  }, [searchQuery, statusFilter, sortField, sortDir, usingLive]);
+  // const filteredMockInvoices = useMemo(() => {
+  //   if (usingLive) return [];
+  //   let result = [...mockInvoices];
+  //   if (searchQuery) {
+  //     const q = searchQuery.toLowerCase();
+  //     result = result.filter(i => i.id.toLowerCase().includes(q) || i.orderId.toLowerCase().includes(q));
+  //   }
+  //   if (statusFilter !== 'All') {
+  //     result = result.filter(i => i.status === statusFilter);
+  //   }
+  //   result.sort((a, b) => {
+  //     if (sortField === 'date') {
+  //       return sortDir === 'desc' ? new Date(b.date).getTime() - new Date(a.date).getTime() : new Date(a.date).getTime() - new Date(b.date).getTime();
+  //     }
+  //     const aVal = a[sortField as keyof Invoice] as number;
+  //     const bVal = b[sortField as keyof Invoice] as number;
+  //     return sortDir === 'desc' ? bVal - aVal : aVal - bVal;
+  //   });
+  //   return result;
+  // }, [searchQuery, statusFilter, sortField, sortDir, usingLive]);
 
   const toggleSort = (field: 'date' | 'total' | 'amountDue') => {
     if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -144,31 +195,39 @@ const InvoicesView: React.FC = () => {
 
   const totalPages = Math.ceil(totalCount / pageSize);
 
+const livePaidThisMonth = erpInvoices
+  .filter((i) => {
+    const paid = Number(i.outstanding_amount) === 0;
+    const invoiceDate = new Date(i.posting_date);
+    const now = new Date();
+
+    return (
+      paid &&
+      invoiceDate.getMonth() === now.getMonth() &&
+      invoiceDate.getFullYear() === now.getFullYear()
+    );
+  })
+  .reduce((s, i) => s + Number(i.grand_total || 0), 0);
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Invoices</h2>
           <div className="flex items-center gap-2 mt-1">
-            <p className="text-sm text-gray-500">{usingLive ? totalCount : filteredMockInvoices.length} invoices</p>
-            {usingLive ? (
-              <span className="flex items-center gap-1 px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded text-[10px] font-medium">
-                <Wifi className="w-3 h-3" /> Live
-              </span>
-            ) : (
-              <span className="flex items-center gap-1 px-2 py-0.5 bg-amber-50 text-amber-700 rounded text-[10px] font-medium">
-                <WifiOff className="w-3 h-3" /> Demo
-              </span>
-            )}
+            <p className="text-sm text-gray-500">{totalCount} invoices</p>
+            <span className="flex items-center gap-1 px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded text-[10px] font-medium">
+  <Wifi className="w-3 h-3" /> Live
+</span>
           </div>
         </div>
         <div className="flex items-center gap-2 self-start">
-          {isConfigured && (
+          {/* {isConfigured && ( */}
             <button onClick={fetchInvoices} disabled={erpLoading} className="p-2.5 border border-gray-200 rounded-lg text-gray-500 hover:bg-gray-50 transition-colors disabled:opacity-50">
               <RefreshCw className={`w-4 h-4 ${erpLoading ? 'animate-spin' : ''}`} />
             </button>
-          )}
-          <button className="px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium transition-colors flex items-center gap-2">
+          {/* )} */}
+          <button  onClick={exportCSV} className="px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium transition-colors flex items-center gap-2">
             <Download className="w-4 h-4" /> Export All
           </button>
         </div>
@@ -189,20 +248,20 @@ const InvoicesView: React.FC = () => {
         <div className="bg-white rounded-xl border border-gray-100 p-5">
           <p className="text-sm text-gray-500">Total Outstanding</p>
           <p className="text-2xl font-bold text-gray-900 mt-1">
-            {usingLive ? `PGK ${liveTotalOutstanding.toLocaleString('en', { minimumFractionDigits: 2 })}` : formatCurrency(totalOutstanding)}
+            PGK {liveTotalOutstanding.toLocaleString('en', { minimumFractionDigits: 2 })}
           </p>
         </div>
         <div className="bg-white rounded-xl border border-red-100 p-5">
           <p className="text-sm text-red-600">Overdue Amount</p>
           <p className="text-2xl font-bold text-red-700 mt-1">
-            {usingLive ? `PGK ${liveOverdue.toLocaleString('en', { minimumFractionDigits: 2 })}` : formatCurrency(overdueAmount)}
+            PGK {liveOverdue.toLocaleString('en', { minimumFractionDigits: 2 })}
           </p>
         </div>
         <div className="bg-white rounded-xl border border-emerald-100 p-5">
-          <p className="text-sm text-emerald-600">Paid This Month</p>
+          <p className="text-2xl font-bold text-emerald-700 mt-1">Paid This Month</p>
           <p className="text-2xl font-bold text-emerald-700 mt-1">
-            {usingLive ? '-' : formatCurrency(paidThisMonth)}
-          </p>
+  PGK {livePaidThisMonth.toLocaleString('en', { minimumFractionDigits: 2 })}
+</p>
         </div>
       </div>
 
@@ -275,7 +334,7 @@ const InvoicesView: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {usingLive ? erpInvoices.map((inv) => (
+                {erpInvoices.map((inv) => (
                   <tr key={inv.name} className="hover:bg-gray-50/50 transition-colors">
                     <td className="px-5 py-4 text-sm font-semibold text-gray-900">{inv.name}</td>
                     <td className="px-5 py-4 text-sm text-gray-600">{formatERPDate(inv.posting_date)}</td>
@@ -297,32 +356,11 @@ const InvoicesView: React.FC = () => {
                       </div>
                     </td>
                   </tr>
-                )) : filteredMockInvoices.map((inv) => (
-                  <tr key={inv.id} className="hover:bg-gray-50/50 transition-colors">
-                    <td className="px-5 py-4 text-sm font-semibold text-gray-900">{inv.id}</td>
-                    <td className="px-5 py-4 text-sm text-gray-600">{formatDate(inv.date)}</td>
-                    <td className="px-5 py-4 text-sm text-gray-600 hidden lg:table-cell">{formatDate(inv.dueDate)}</td>
-                    <td className="px-5 py-4"><StatusBadge status={inv.status} /></td>
-                    <td className="px-5 py-4 text-right text-sm font-semibold text-gray-900">{formatCurrency(inv.total)}</td>
-                    <td className="px-5 py-4 text-right text-sm font-semibold hidden sm:table-cell">
-                      <span className={inv.amountDue > 0 ? 'text-amber-600' : 'text-gray-400'}>{formatCurrency(inv.amountDue)}</span>
-                    </td>
-                    <td className="px-5 py-4">
-                      <div className="flex items-center justify-center gap-1">
-                        <button onClick={() => setSelectedInvoice(inv)} className="p-2 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors">
-                          <Eye className="w-4 h-4" />
-                        </button>
-                        <button className="p-2 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors">
-                          <Download className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                )) }
               </tbody>
             </table>
           </div>
-          {(usingLive ? erpInvoices : filteredMockInvoices).length === 0 && !erpLoading && (
+          {erpInvoices.length === 0 && !erpLoading && (
             <div className="text-center py-16">
               <FileText className="w-12 h-12 text-gray-300 mx-auto mb-3" />
               <p className="text-gray-500 font-medium">No invoices found</p>
@@ -332,7 +370,7 @@ const InvoicesView: React.FC = () => {
       )}
 
       {/* Pagination */}
-      {usingLive && totalPages > 1 && (
+      { totalPages > 1 && (
         <div className="flex items-center justify-between bg-white rounded-xl border border-gray-100 px-5 py-3">
           <p className="text-sm text-gray-500">
             Showing {page * pageSize + 1}-{Math.min((page + 1) * pageSize, totalCount)} of {totalCount}
@@ -355,9 +393,13 @@ const InvoicesView: React.FC = () => {
           <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between p-6 border-b border-gray-100">
               <div>
-                <h3 className="text-lg font-bold text-gray-900">{usingLive ? selectedInvoice.name : selectedInvoice.id}</h3>
-                <p className="text-sm text-gray-500">{usingLive ? selectedInvoice.customer_name : `Order: ${selectedInvoice.orderId}`}</p>
-              </div>
+  <h3 className="text-lg font-bold text-gray-900">
+    {selectedInvoice?.name}
+  </h3>
+  <p className="text-sm text-gray-500">
+    {selectedInvoice?.customer_name}
+  </p>
+</div>
               <div className="flex items-center gap-2">
                 <button className="p-2 rounded-lg hover:bg-gray-100 transition-colors text-gray-500"><Printer className="w-5 h-5" /></button>
                 <button className="p-2 rounded-lg hover:bg-gray-100 transition-colors text-gray-500"><Download className="w-5 h-5" /></button>
@@ -371,7 +413,7 @@ const InvoicesView: React.FC = () => {
                   <Loader2 className="w-6 h-6 text-red-600 animate-spin mx-auto mb-2" />
                   <p className="text-sm text-gray-500">Loading invoice details...</p>
                 </div>
-              ) : usingLive && invoiceDetail ? (
+              ) :  invoiceDetail ? (
                 <>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                     <div>
@@ -438,43 +480,6 @@ const InvoicesView: React.FC = () => {
                     <button className="w-full py-3 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition-colors">
                       Pay {invoiceDetail.currency || 'PGK'} {Number(invoiceDetail.outstanding_amount).toLocaleString('en', { minimumFractionDigits: 2 })} Now
                     </button>
-                  )}
-                </>
-              ) : !usingLive && selectedInvoice ? (
-                <>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                    <div><p className="text-xs text-gray-500">Invoice Date</p><p className="text-sm font-medium text-gray-900 mt-0.5">{formatDate(selectedInvoice.date)}</p></div>
-                    <div><p className="text-xs text-gray-500">Due Date</p><p className="text-sm font-medium text-gray-900 mt-0.5">{formatDate(selectedInvoice.dueDate)}</p></div>
-                    <div><p className="text-xs text-gray-500">Status</p><div className="mt-1"><StatusBadge status={selectedInvoice.status} /></div></div>
-                    <div><p className="text-xs text-gray-500">Amount Due</p><p className={`text-sm font-bold mt-0.5 ${selectedInvoice.amountDue > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>{formatCurrency(selectedInvoice.amountDue)}</p></div>
-                  </div>
-                  <div className="border border-gray-100 rounded-lg overflow-hidden">
-                    <table className="w-full">
-                      <thead><tr className="bg-gray-50">
-                        <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500">Description</th>
-                        <th className="text-center px-4 py-2.5 text-xs font-semibold text-gray-500">Qty</th>
-                        <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500">Rate</th>
-                        <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500">Amount</th>
-                      </tr></thead>
-                      <tbody className="divide-y divide-gray-50">
-                        {selectedInvoice.items.map((item: any, i: number) => (
-                          <tr key={i}>
-                            <td className="px-4 py-3 text-sm text-gray-900">{item.description}</td>
-                            <td className="px-4 py-3 text-center text-sm text-gray-600">{item.qty}</td>
-                            <td className="px-4 py-3 text-right text-sm text-gray-600">{formatCurrency(item.rate)}</td>
-                            <td className="px-4 py-3 text-right text-sm font-semibold text-gray-900">{formatCurrency(item.amount)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                  <div className="bg-gray-50 rounded-lg p-4 space-y-2">
-                    <div className="flex justify-between text-sm"><span className="text-gray-500">Subtotal</span><span className="font-medium text-gray-900">{formatCurrency(selectedInvoice.total)}</span></div>
-                    <div className="flex justify-between text-sm"><span className="text-gray-500">Amount Paid</span><span className="font-medium text-emerald-600">{formatCurrency(selectedInvoice.amountPaid)}</span></div>
-                    <div className="flex justify-between text-sm pt-2 border-t border-gray-200"><span className="font-semibold text-gray-900">Balance Due</span><span className="font-bold text-lg text-gray-900">{formatCurrency(selectedInvoice.amountDue)}</span></div>
-                  </div>
-                  {selectedInvoice.amountDue > 0 && (
-                    <button className="w-full py-3 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition-colors">Pay {formatCurrency(selectedInvoice.amountDue)} Now</button>
                   )}
                 </>
               ) : null}
